@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Price Tracker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            background: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .controls {
+            position: fixed;
+            left: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .btn {
+            padding: 15px 25px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 120px;
+        }
+        
+        .btn-green {
+            background: linear-gradient(45deg, #28a745, #20c997);
+            color: white;
+        }
+        
+        .btn-red {
+            background: linear-gradient(45deg, #dc3545, #e74c3c);
+            color: white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .price-display {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 15px 25px;
+            border-radius: 8px;
+            font-size: 24px;
+            font-weight: bold;
+            border: 2px solid #444;
+        }
+        
+        .status {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .connected {
+            border-left: 4px solid #28a745;
+        }
+        
+        .disconnected {
+            border-left: 4px solid #dc3545;
+        }
+        
+        .price-dot {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            transition: all 0.5s ease;
+            z-index: 100;
+        }
+        
+        .price-dot.green {
+            background: #28a745;
+            box-shadow: 0 0 10px #28a745;
+        }
+        
+        .price-dot.red {
+            background: #dc3545;
+            box-shadow: 0 0 10px #dc3545;
+        }
+        
+        .canvas-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="status disconnected" id="status">Disconnected</div>
+    
+    <div class="price-display">
+        Price: $<span id="priceValue">0</span>
+    </div>
+    
+    <div class="controls">
+        <button class="btn btn-green" id="plusBtn">+$10</button>
+        <button class="btn btn-red" id="minusBtn">-$10</button>
+    </div>
+    
+    <div class="canvas-area" id="canvasArea"></div>
+
+    <script>
+        let ws = null;
+        let price = 0;
+        let xOffset = 200; // Starting x position
+        let dotCount = 0;
+        
+        const statusEl = document.getElementById('status');
+        const priceValueEl = document.getElementById('priceValue');
+        const plusBtn = document.getElementById('plusBtn');
+        const minusBtn = document.getElementById('minusBtn');
+        const canvasArea = document.getElementById('canvasArea');
+        
+        function connectWebSocket() {
+            try {
+                ws = new WebSocket('wss://upgraded-space-enigma-pjwppw4xqw65frgwp-8080.app.github.dev/');
+                
+                ws.onopen = function() {
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'status connected';
+                    console.log('WebSocket connected');
+                };
+                
+                ws.onmessage = function(event) {
+                    console.log('Received:', event.data);
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.price !== undefined && data.color && data.x !== undefined && data.y !== undefined) {
+                            updatePrice(data.price);
+                            createDot(data.color, data.x, data.y);
+                            // Update dotCount to stay in sync for future local actions
+                            dotCount = Math.max(dotCount, Math.floor((data.x - xOffset) / 35) + 1);
+                        }
+                    } catch (e) {
+                        console.log('Received non-JSON message:', event.data);
+                    }
+                };
+                
+                ws.onclose = function() {
+                    statusEl.textContent = 'Disconnected';
+                    statusEl.className = 'status disconnected';
+                    console.log('WebSocket disconnected');
+                    // Try to reconnect after 3 seconds
+                    setTimeout(connectWebSocket, 3000);
+                };
+                
+                ws.onerror = function(error) {
+                    console.error('WebSocket error:', error);
+                    statusEl.textContent = 'Error';
+                    statusEl.className = 'status disconnected';
+                };
+            } catch (error) {
+                console.error('Failed to connect to WebSocket:', error);
+                statusEl.textContent = 'Connection Failed';
+                statusEl.className = 'status disconnected';
+                // Try to reconnect after 5 seconds
+                setTimeout(connectWebSocket, 5000);
+            }
+        }
+        
+        function sendMessage(color, priceChange) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const newPrice = price + priceChange;
+                
+                // Calculate y position (every 5 in y equals 1 in price, so multiply by 5)
+                // Start from bottom of screen
+                const y = window.innerHeight - (newPrice * 5);
+                
+                // Calculate x position with slight offset for each new dot
+                const x = xOffset + (dotCount * 35);
+                
+                const message = {
+                    color: color,
+                    x: x,
+                    y: y,
+                    price: newPrice
+                };
+                
+                ws.send(JSON.stringify(message));
+                console.log('Sent:', message);
+                
+                // Update local price and create visual dot
+                updatePrice(newPrice);
+                createDot(color, x, y);
+                
+                dotCount++;
+            } else {
+                console.log('WebSocket not connected');
+            }
+        }
+        
+        function updatePrice(newPrice) {
+            price = newPrice;
+            priceValueEl.textContent = newPrice.toFixed(2);
+        }
+        
+        function createDot(color, x, y) {
+            const dot = document.createElement('div');
+            dot.className = `price-dot ${color}`;
+            dot.style.left = x + 'px';
+            dot.style.top = y + 'px';
+            
+            canvasArea.appendChild(dot);
+            
+            // Squares now persist permanently
+        }
+        
+        // Event listeners
+        plusBtn.addEventListener('click', function() {
+            sendMessage('green', 10);
+        });
+        
+        minusBtn.addEventListener('click', function() {
+            sendMessage('red', -10);
+        });
+        
+        // Connect to WebSocket on page load
+        connectWebSocket();
+        
+        // Handle window resize to keep dots positioned correctly
+        window.addEventListener('resize', function() {
+            // Update any existing dots if needed
+            const dots = document.querySelectorAll('.price-dot');
+            dots.forEach(dot => {
+                const currentY = parseInt(dot.style.top);
+                const priceFromY = (window.innerHeight - currentY) / 5;
+                dot.style.top = (window.innerHeight - (priceFromY * 5)) + 'px';
+            });
+        });
+    </script>
+</body>
+</html>
